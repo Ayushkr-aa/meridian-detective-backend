@@ -1,0 +1,6 @@
+{
+  "name": "AI Detective: Interrogation Engine & Interface",
+  "description": "Technical architecture, data flow pipeline, and Stitch HUD interrogation interface for a first-person AI detective game.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
