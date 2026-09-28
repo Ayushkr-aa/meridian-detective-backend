@@ -321,6 +321,63 @@ async function runTestSuite() {
     assert(sessionData.contradictions.some((c: any) => c.id === 'CON-TIMELINE-01' && c.discovered), 'Session preserves discovered contradiction');
     assert(sessionData.evidencePresented.includes('evd-01'), 'Session preserves presented evidence ID');
 
+    // Test Group 11: Security Audit & Anti-Leak Boundary Assertions
+    console.log('\n--- Test Suite 11: Security Audit & Anti-Leak Boundary Assertions ---');
+
+    // 11.1 Verify exact allowed top-level keys
+    const allowedKeys = new Set([
+      'turnId',
+      'sessionId',
+      'suspectId',
+      'spokenResponse',
+      'emotion',
+      'informationRevealed',
+      'memoryCreated',
+      'evidenceReaction',
+      'contradiction',
+      'suggestedAction',
+      'animationState',
+      'modeUsed',
+      'diagnostics',
+    ]);
+    const responseKeys = Object.keys(turn2Data);
+    const unauthorizedKeys = responseKeys.filter(k => !allowedKeys.has(k));
+    assert(unauthorizedKeys.length === 0, `Public response contains ONLY permitted DTO keys (unauthorized found: [${unauthorizedKeys.join(', ')}])`);
+
+    // 11.2 Verify forbidden internal fields are absent on the turn response object
+    assert(turn2Data.response === undefined, 'Forbidden field: response is not exposed');
+    assert(turn2Data.matchedKnowledgeNode === undefined, 'Forbidden field: matchedKnowledgeNode is not exposed');
+    assert(turn2Data.canonicalTruth === undefined, 'Forbidden field: canonicalTruth is not exposed');
+    assert(turn2Data.whatNpcKnows === undefined, 'Forbidden field: whatNpcKnows is not exposed');
+    assert(turn2Data.publicStory === undefined, 'Forbidden field: publicStory is not exposed');
+    assert(turn2Data.dialogueBranches === undefined, 'Forbidden field: dialogueBranches is not exposed');
+    assert(turn2Data.internalMonologue === undefined, 'Forbidden field: internalMonologue is not exposed');
+
+    // 11.3 Deep recursive string scan on turn JSON payload
+    const rawTurnPayload = JSON.stringify(turn2Data);
+    assert(!rawTurnPayload.includes('"canonicalTruth"'), 'Deep scan: canonicalTruth not found anywhere in turn JSON');
+    assert(!rawTurnPayload.includes('"whatNpcKnows"'), 'Deep scan: whatNpcKnows not found anywhere in turn JSON');
+    assert(!rawTurnPayload.includes('"matchedKnowledgeNode"'), 'Deep scan: matchedKnowledgeNode not found anywhere in turn JSON');
+    assert(!rawTurnPayload.includes('"dialogueBranches"'), 'Deep scan: dialogueBranches not found anywhere in turn JSON');
+    assert(!rawTurnPayload.includes('"internalMonologue"'), 'Deep scan: internalMonologue not found anywhere in turn JSON');
+    assert(!rawTurnPayload.includes('"canonicalResolution"'), 'Deep scan: canonicalResolution stripped from contradiction DTO');
+
+    // 11.4 Deep recursive scan on session JSON payload
+    const rawSessionPayload = JSON.stringify(sessionData);
+    assert(!rawSessionPayload.includes('"canonicalTruth"'), 'Deep scan: session endpoint does not leak canonicalTruth');
+    assert(!rawSessionPayload.includes('"whatNpcKnows"'), 'Deep scan: session endpoint does not leak whatNpcKnows');
+    assert(!rawSessionPayload.includes('"dialogueBranches"'), 'Deep scan: session endpoint does not leak dialogueBranches');
+    assert(!rawSessionPayload.includes('"internalMonologue"'), 'Deep scan: session conversation history does not leak internalMonologue');
+    assert(!rawSessionPayload.includes('"knowledgeBase"'), 'Deep scan: session endpoint does not expose raw knowledgeBase');
+
+    // 11.5 Deep scan on /api/interrogation/contradictions
+    const contradictionsRes = await fetch(`${baseUrl}/api/interrogation/contradictions?sessionId=godot-test-session-001`);
+    assert(contradictionsRes.status === 200, 'GET /api/interrogation/contradictions returns 200');
+    const contradictionsData = await contradictionsRes.json();
+    const rawContradictionsPayload = JSON.stringify(contradictionsData);
+    assert(!rawContradictionsPayload.includes('"canonicalResolution"'), 'Deep scan: contradictions endpoint does not leak canonicalResolution');
+    assert(!rawContradictionsPayload.includes('"canonicalTruth"'), 'Deep scan: contradictions endpoint does not leak canonicalTruth');
+
   } finally {
     await new Promise<void>((resolve) => testServer.close(() => resolve()));
   }

@@ -109,8 +109,8 @@ export class GeminiInterrogationService {
         sessionMemories,
       });
 
-      // 2. Query Gemini with structured response schema
-      const response = await ai.models.generateContent({
+      // 2. Query Gemini with structured response schema and bounded exponential backoff for 429/503
+      const response = await this.queryGeminiWithBackoff(ai, {
         model: this.MODEL_NAME,
         contents: userPrompt,
         config: {
@@ -241,8 +241,10 @@ export class GeminiInterrogationService {
         response: mockFallback,
         modeUsed: 'mock',
         diagnostics: {
-          warning: 'Gemini call failed; seamlessly served response via deterministic Mock Engine.',
-          errorDetails: err?.message || String(err),
+          modelUsed: 'local-mock-engine',
+          validationPassed: true,
+          fallbackActive: true,
+          warning: 'Gemini service unavailable; response served via deterministic mock engine.',
         },
         rawInformationRevealed: [],
         rawMemory: {
@@ -252,6 +254,47 @@ export class GeminiInterrogationService {
         },
         rawEvidenceReaction: evidenceAttached ? { reaction: 'defensive', evidenceId: evidenceAttached.id } : undefined,
       };
+    }
+  }
+
+  /**
+   * Executes Gemini generation with bounded exponential backoff for transient 429/503 errors.
+   */
+  private static async queryGeminiWithBackoff(
+    ai: GoogleGenAI,
+    requestConfig: any,
+    maxRetries = 2
+  ): Promise<any> {
+    let attempt = 0;
+    let delayMs = 300;
+
+    while (true) {
+      try {
+        return await ai.models.generateContent(requestConfig);
+      } catch (err: any) {
+        attempt++;
+        const status = err?.status || err?.statusCode || (typeof err?.code === 'number' ? err.code : null);
+        const errMessage = String(err?.message || '');
+        const isTransient =
+          status === 429 ||
+          status === 503 ||
+          errMessage.includes('429') ||
+          errMessage.includes('503') ||
+          errMessage.includes('RESOURCE_EXHAUSTED') ||
+          errMessage.includes('UNAVAILABLE') ||
+          errMessage.includes('overloaded');
+
+        if (isTransient && attempt <= maxRetries) {
+          console.warn(
+            `[GeminiInterrogationService] Transient ${status || 'rate-limit/overload'} error encountered. ` +
+            `Retrying in ${delayMs}ms (attempt ${attempt} of ${maxRetries})...`
+          );
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          delayMs = Math.min(1000, delayMs * 2);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 }

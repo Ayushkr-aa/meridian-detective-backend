@@ -89,6 +89,24 @@ export interface GodotInterrogationTurnRequest {
   recentHistory?: Array<{ speaker: string; text: string }>;
 }
 
+export interface PublicContradictionDTO {
+  id: string;
+  type: ContradictionType;
+  severity: ContradictionSeverity;
+  claims: ContradictionClaim[];
+  discovered: boolean;
+  stressImpact: number;
+  evidenceId?: string;
+  discoveredAtTurn?: number;
+}
+
+export interface SafeDiagnosticsDTO {
+  modelUsed?: string;
+  validationPassed?: boolean;
+  fallbackActive?: boolean;
+  warning?: string;
+}
+
 export interface GodotInterrogationTurnResponse {
   turnId: string;
   sessionId: string;
@@ -101,12 +119,9 @@ export interface GodotInterrogationTurnResponse {
     reaction: string;
     evidenceId: string | null;
   } | null;
-  contradiction: GodotContradictionRecord | null;
+  contradiction: PublicContradictionDTO | null;
   suggestedAction: SuggestedPlayerAction;
   animationState: GodotAnimationState;
-
-  // React & Stage 2 backwards-compatibility fields:
-  response?: EngineResponse;
   modeUsed?: 'gemini' | 'mock';
-  diagnostics?: any;
+  diagnostics?: SafeDiagnosticsDTO;
 }

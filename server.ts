@@ -7,7 +7,12 @@ import { CANONICAL_CASE, INITIAL_KABIR_MALHOTRA, CANONICAL_EVIDENCE } from './sr
 import { SessionStore } from './src/services/sessionStore.js';
 import { ContradictionEngine } from './src/engine/contradictionEngine.js';
 import { AnimationMapper } from './src/services/animationMapper.js';
-import { GodotInterrogationTurnResponse, GodotMemoryRecord } from './src/types/godotApiTypes.js';
+import {
+  GodotInterrogationTurnResponse,
+  GodotMemoryRecord,
+  PublicContradictionDTO,
+  SafeDiagnosticsDTO,
+} from './src/types/godotApiTypes.js';
 import { getAuthoritativeGeminiModel } from './src/config/modelConfig.js';
 
 dotenv.config();
@@ -36,17 +41,40 @@ export async function createServer(skipVite = false) {
     });
   });
 
-  // Session Query Endpoint
+  // Session Query Endpoint (Strict Public DTO - No secrets or internal logic exposed)
   app.get('/api/interrogation/session/:sessionId?', (req, res) => {
     const sessionId = req.params.sessionId || req.query.sessionId as string || SessionStore.DEFAULT_SESSION_ID;
     const session = SessionStore.getOrCreateSession(sessionId);
+
+    // Sanitize conversation history: omit internalMonologue
+    const safeHistory = session.conversationHistory.map(turn => ({
+      turnNumber: turn.turnNumber,
+      turnId: turn.turnId,
+      speaker: turn.speaker,
+      text: turn.text,
+      timestamp: turn.timestamp,
+      evidencePresented: turn.evidencePresented,
+      isContradictionHit: turn.isContradictionHit,
+    }));
+
+    // Sanitize contradictions: omit canonicalResolution
+    const safeContradictions: PublicContradictionDTO[] = session.contradictions.map(c => ({
+      id: c.id,
+      type: c.type,
+      severity: c.severity,
+      claims: c.claims,
+      discovered: c.discovered,
+      stressImpact: c.stressImpact,
+      evidenceId: c.evidenceId,
+      discoveredAtTurn: c.discoveredAtTurn,
+    }));
+
     res.json({
       sessionId: session.sessionId,
       suspectId: session.suspectId,
-      suspect: session.suspect,
       turnCount: session.turnCount,
-      conversationHistory: session.conversationHistory,
-      contradictions: session.contradictions,
+      conversationHistory: safeHistory,
+      contradictions: safeContradictions,
       evidencePresented: session.evidencePresented,
       playerDiscoveries: session.playerDiscoveries,
       memoriesCreated: session.memoriesCreated,
@@ -57,11 +85,21 @@ export async function createServer(skipVite = false) {
   app.post('/api/interrogation/session/reset', (req, res) => {
     const sessionId = req.body.sessionId || SessionStore.DEFAULT_SESSION_ID;
     const session = SessionStore.resetSession(sessionId);
+    const safeContradictions: PublicContradictionDTO[] = session.contradictions.map(c => ({
+      id: c.id,
+      type: c.type,
+      severity: c.severity,
+      claims: c.claims,
+      discovered: c.discovered,
+      stressImpact: c.stressImpact,
+      evidenceId: c.evidenceId,
+      discoveredAtTurn: c.discoveredAtTurn,
+    }));
     res.json({
       status: 'reset_successful',
       sessionId: session.sessionId,
       turnCount: session.turnCount,
-      contradictions: session.contradictions,
+      contradictions: safeContradictions,
     });
   });
 
@@ -69,9 +107,19 @@ export async function createServer(skipVite = false) {
   app.get('/api/interrogation/contradictions', (req, res) => {
     const sessionId = req.query.sessionId as string || SessionStore.DEFAULT_SESSION_ID;
     const session = SessionStore.getOrCreateSession(sessionId);
+    const safeContradictions: PublicContradictionDTO[] = session.contradictions.map(c => ({
+      id: c.id,
+      type: c.type,
+      severity: c.severity,
+      claims: c.claims,
+      discovered: c.discovered,
+      stressImpact: c.stressImpact,
+      evidenceId: c.evidenceId,
+      discoveredAtTurn: c.discoveredAtTurn,
+    }));
     res.json({
       sessionId: session.sessionId,
-      contradictions: session.contradictions,
+      contradictions: safeContradictions,
     });
   });
 
@@ -203,8 +251,36 @@ export async function createServer(skipVite = false) {
         serviceResult.rawInformationRevealed || []
       );
 
-      // 9. Formulate Godot 4.x Compliant Response DTO
-      const godotResponse: GodotInterrogationTurnResponse = {
+      // Map contradiction to strict public DTO (stripping canonicalResolution and internal IDs)
+      const publicContradiction: PublicContradictionDTO | null = finalContradiction
+        ? {
+            id: finalContradiction.id,
+            type: finalContradiction.type,
+            severity: finalContradiction.severity,
+            claims: finalContradiction.claims.map(c => ({
+              source: c.source,
+              claim: c.claim,
+            })),
+            discovered: finalContradiction.discovered,
+            stressImpact: finalContradiction.stressImpact,
+            evidenceId: finalContradiction.evidenceId,
+            discoveredAtTurn: finalContradiction.discoveredAtTurn,
+          }
+        : null;
+
+      // Safe operational diagnostics only (no internal secrets, prompt dumps, or error traces)
+      const safeDiagnostics: SafeDiagnosticsDTO = {
+        modelUsed: String(serviceResult.diagnostics?.modelUsed || 'gemini-3.8-flash'),
+        validationPassed: serviceResult.diagnostics?.validationPassed !== false,
+        fallbackActive: serviceResult.modeUsed === 'mock',
+        warning: serviceResult.diagnostics?.warning,
+      };
+
+      // 9. Formulate Strict Public Response DTO
+      // Only Allowed Fields:
+      // turnId, sessionId, suspectId, spokenResponse, emotion, informationRevealed,
+      // memoryCreated, evidenceReaction, contradiction, suggestedAction, animationState, modeUsed, diagnostics
+      const publicResponse: GodotInterrogationTurnResponse = {
         turnId: `turn-${Date.now()}-${session.turnCount}`,
         sessionId: session.sessionId,
         suspectId: session.suspectId,
@@ -215,25 +291,34 @@ export async function createServer(skipVite = false) {
           composure: engineResponse.newEmotionalState.composure,
           suspicion: engineResponse.newEmotionalState.defensiveness,
         },
-        informationRevealed: serviceResult.rawInformationRevealed || [],
-        memoryCreated: newGodotMemories,
+        informationRevealed: (serviceResult.rawInformationRevealed || []).map(info => ({
+          factId: String(info.factId),
+          importance: String(info.importance),
+        })),
+        memoryCreated: newGodotMemories.map(m => ({
+          id: m.id,
+          type: m.type,
+          summary: m.summary,
+          turnNumber: m.turnNumber,
+          timestamp: m.timestamp,
+          significance: m.significance,
+          associatedClaim: m.associatedClaim,
+          contradictionId: m.contradictionId,
+        })),
         evidenceReaction: attachedEvidence
           ? {
               reaction: engineResponse.newEmotionalState.stressIndex > 70 ? 'fear' : 'defensive',
               evidenceId: attachedEvidence.id,
             }
           : null,
-        contradiction: finalContradiction,
+        contradiction: publicContradiction,
         suggestedAction,
         animationState,
-
-        // Backwards compatibility with React client & Stage 2 test assertions:
-        response: engineResponse,
         modeUsed: serviceResult.modeUsed,
-        diagnostics: serviceResult.diagnostics,
+        diagnostics: safeDiagnostics,
       };
 
-      res.json(godotResponse);
+      res.json(publicResponse);
     } catch (err: any) {
       console.error('[server] Error handling /api/interrogation/turn:', err);
       res.status(500).json({

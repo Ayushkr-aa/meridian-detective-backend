@@ -38,9 +38,44 @@ export class InterrogationClient {
       }
 
       const data = await res.json();
-      if (data && data.response) {
+      if (data && typeof data.spokenResponse === 'string') {
+        const stress = typeof data.emotion?.stress === 'number' ? data.emotion.stress : suspect.emotionalState.stressIndex;
+        const composure = typeof data.emotion?.composure === 'number' ? data.emotion.composure : suspect.emotionalState.composure;
+        const defensiveness = typeof data.emotion?.suspicion === 'number' ? data.emotion.suspicion : suspect.emotionalState.defensiveness;
+        const postureStr = (data.animationState?.posture || data.emotion?.state || 'composed').toUpperCase();
+
+        const clientResponse: EngineResponse = {
+          spokenDialogue: data.spokenResponse,
+          internalMonologue: `[Demeanor: ${postureStr}]`,
+          stressDelta: 0,
+          newEmotionalState: {
+            stressIndex: stress,
+            stressLevel: stress >= 85 ? 'MAXIMUM' : stress >= 75 ? 'CRITICAL' : stress >= 65 ? 'SURGING' : stress >= 50 ? 'ELEVATED' : 'NORMAL',
+            pulseBpm: Math.round(72 + (stress / 100) * 68),
+            posture: (postureStr.includes('CORNERED') ? 'CORNERED' : postureStr.includes('TENSE') ? 'TENSE' : postureStr.includes('DEFENSIVE') ? 'DEFENSIVE' : postureStr.includes('ATTENTIVE') ? 'CALCULATING' : 'COMPOSED') as any,
+            posturePips: stress >= 85 ? 5 : stress >= 75 ? 4 : stress >= 65 ? 3 : 2,
+            composure,
+            defensiveness,
+          },
+          isContradiction: Boolean(data.contradiction?.discovered),
+          memoryCreated: {
+            id: data.memoryCreated?.[0]?.id || `mem-${Date.now()}`,
+            timestamp: data.memoryCreated?.[0]?.timestamp || new Date().toLocaleTimeString('en-IN', { hour12: false }),
+            topic: data.memoryCreated?.[0]?.summary || 'Interrogation Exchange',
+            playerPrompt: playerText,
+            npcResponse: data.spokenResponse,
+            significance: (data.memoryCreated?.[0]?.significance || 'MEDIUM') as any,
+            emotionalImpact: data.contradiction ? 14 : 2,
+            repetitionCount: 1,
+            lieExposed: Boolean(data.contradiction?.discovered),
+          },
+          intentDetected: data.contradiction?.id || 'INTERROGATION_EXCHANGE',
+          concessionUnlocked: data.contradiction ? `Exposed contradiction ${data.contradiction.id}` : undefined,
+          isRefusal: data.animationState?.gesture === 'dismissive_wave',
+        };
+
         return {
-          response: data.response,
+          response: clientResponse,
           modeUsed: data.modeUsed || 'gemini',
           diagnostics: data.diagnostics,
           contradiction: data.contradiction,
